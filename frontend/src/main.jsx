@@ -23,3 +23,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     </ThemeProvider>
   </React.StrictMode>
 );
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch((error) => {
+    console.warn('Impossibile attivare la cache dell’app', error);
+  });
+}

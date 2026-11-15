@@ -1,9 +1,22 @@
 // Display formatters. Keep i18n-ready (use Intl APIs).
 
+function calendarDateParts(value) {
+  if (typeof value !== 'string') return null;
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!parts) return null;
+  const date = new Date(value + 'T00:00:00Z');
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    return null;
+  }
+  return parts.slice(1);
+}
+
 export function formatDate(value) {
   // Italian-friendly numeric format (dd/MM/yyyy), e.g. 19/06/2026.
   // Note: native <input type="date"> stays browser-locale driven on purpose.
   if (!value) return '';
+  const calendar = calendarDateParts(value);
+  if (calendar) return calendar.reverse().join('/');
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return '';
   return new Intl.DateTimeFormat('it-IT', {
@@ -83,6 +96,7 @@ export function kmInputToMeters(km) {
  * Falls back to today's local date when the value is missing/invalid.
  */
 export function toDateInputValue(value) {
+  if (calendarDateParts(value)) return value;
   const d = value ? new Date(value) : new Date();
   const safe = Number.isNaN(d.getTime()) ? new Date() : d;
   const year = safe.getFullYear();

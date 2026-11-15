@@ -1,9 +1,3 @@
-// Auth context: owns the JWT + current user and exposes login/register/logout.
-// - Token is persisted in localStorage via utils/storage.js.
-// - On mount we hydrate the user from /auth/me if a token exists.
-// - A global 'auth:unauthorized' event (dispatched by axiosClient on 401)
-//   resets state so an expired/invalid token can't keep us "logged in".
-
 import {
   createContext,
   useCallback,
@@ -12,6 +6,7 @@ import {
   useState,
 } from 'react';
 import { getToken, setToken, clearToken } from '../utils/storage.js';
+import { getLocalProfile, setLocalProfile } from '../offline/snapshots.js';
 import * as authApi from '../api/auth.js';
 
 export const AuthContext = createContext(null);
@@ -23,6 +18,7 @@ export function AuthProvider({ children }) {
 
   const applyLogout = useCallback(() => {
     clearToken();
+    setLocalProfile(null);
     setTokenState(null);
     setUser(null);
   }, []);
@@ -40,12 +36,18 @@ export function AuthProvider({ children }) {
       try {
         const me = await authApi.me();
         if (!cancelled) {
+          setLocalProfile(me);
           setTokenState(existing);
           setUser(me);
         }
-      } catch {
-        // Token invalid/expired -> drop it.
-        if (!cancelled) applyLogout();
+      } catch (error) {
+        if (cancelled) return;
+        const profile = getLocalProfile();
+        if (profile && (!error.status || error.status === 401 || error.status >= 500)) {
+          setUser(profile);
+        } else {
+          applyLogout();
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -57,12 +59,13 @@ export function AuthProvider({ children }) {
     };
   }, [applyLogout]);
 
-  // React to global 401s (e.g. token expired mid-session).
   useEffect(() => {
-    const onUnauthorized = () => applyLogout();
-    window.addEventListener('auth:unauthorized', onUnauthorized);
-    return () => window.removeEventListener('auth:unauthorized', onUnauthorized);
-  }, [applyLogout]);
+    const refreshAccount = (event) => {
+      if (event.key === null || event.key === 'gym.token') window.location.reload();
+    };
+    window.addEventListener('storage', refreshAccount);
+    return () => window.removeEventListener('storage', refreshAccount);
+  }, []);
 
   // LOGIN: ottiene un token JWT dal backend e carica l'utente.
   const login = useCallback(async ({ email, password }) => {
@@ -71,20 +74,23 @@ export function AuthProvider({ children }) {
     //    e lo rinominiamo `accessToken`.
     const { access_token: accessToken } = await authApi.login({ email, password });
 
-    // 2) Salviamo SUBITO il token: in localStorage (setToken, cosi' sopravvive
-    //    al refresh) e nello stato React (setTokenState, cosi' la UI reagisce).
-    //    E' importante salvarlo PRIMA del passo 3, perche' l'interceptor di
-    //    axios legge il token dallo storage e lo allega come header
-    //    "Authorization: Bearer ..." alla chiamata /auth/me.
+    // The request interceptor needs the token before fetching the account.
     setToken(accessToken);
-    setTokenState(accessToken);
 
     // 3) Con il token ormai attivo, chiediamo "chi sono" (GET /auth/me) per
     //    avere i dati dell'utente (id, email, ...) e li mettiamo nello stato.
-    const me = await authApi.me();
+    let me;
+    try {
+      me = await authApi.me();
+      setLocalProfile(me);
+    } catch (error) {
+      applyLogout();
+      throw error;
+    }
+    setTokenState(accessToken);
     setUser(me);
     return me;
-  }, []);
+  }, [applyLogout]);
 
   // REGISTER: la logica di registrazione con email e password.
   // E' volutamente semplice perche' la validazione (email valida, password
