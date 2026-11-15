@@ -4,7 +4,7 @@ A simple, mobile-first workout tracking web app for personal use. Full-stack sca
 a FastAPI modular monolith backend and a Vite + React JavaScript frontend.
 
 > Canonical project state: [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md).
-> Current phase: **Phase 7 complete**. Next is Phase 8 — AI Readiness.
+> Current status: **Phase 8 (AI Readiness) and Phase 9 (Voice Assistant) are implemented.**
 
 ---
 
@@ -16,8 +16,11 @@ gym-tracker-app/
 │   ├── app/
 │   │   ├── core/            config, db, security, deps, response envelope, exceptions
 │   │   ├── auth/            User model, JWT register/login/me
-│   │   ├── exercises/       seeded exercise catalog (read-only API)
+│   │   ├── exercises/       seeded catalog and personal exercises
 │   │   ├── workouts/        Workout, WorkoutExercise, Set + CRUD
+│   │   ├── templates/       workout templates and session creation
+│   │   ├── commands/        validated commands for workout logging
+│   │   ├── assistant/       assistant interpretation and execution
 │   │   ├── seed/            predefined exercises + idempotent seeder
 │   │   └── main.py          FastAPI app factory
 │   ├── alembic/             migration environment + versions/
@@ -54,7 +57,7 @@ gym-tracker-app/
 
 ### Backend - modular monolith
 
-- **Pattern**: each domain (auth, exercises, workouts) is a self-contained module
+- **Pattern**: each core domain (auth, exercises, workouts, templates) is a self-contained module
   owning its own `models.py`, `schemas.py`, `service.py`, `routes.py`. Cross-cutting
   concerns live in `core/` (config, database, security, dependencies, response, exceptions).
 - **Why**: the PRD scope is small (personal use) and a monolith is the simplest
@@ -180,26 +183,39 @@ enabled when you migrate.
 
 ## 4. API contract (recap)
 
-> **Stale table below.** Authoritative routes are in `docs/AI_HANDOFF.md` §2.6.
-> There is no `POST /sets` or `PUT /sets/{id}`. Use the Phase 5 granular Set APIs.
+Selected endpoints are listed below. The running backend exposes the full API at `/docs`.
 
 All responses follow `{ success: boolean, data: any, error: string | null }`.
 Pydantic request-validation 422 also includes a `details` array (intentional exception).
 
-| Method | Path                | Auth | Notes                            |
-| ------ | ------------------- | ---- | -------------------------------- |
-| POST   | /api/auth/register  | no   | Create account                   |
-| POST   | /api/auth/login     | no   | Returns JWT                      |
-| GET    | /api/auth/me        | yes  | Current user                     |
-| GET    | /api/exercises      | yes  | Seeded catalog                   |
-| GET    | /api/workouts       | yes  | List user's workouts             |
-| POST   | /api/workouts       | yes  | Create workout (nested setup ok) |
-| GET    | /api/workouts/{id}  | yes  | Single workout                   |
-| PUT    | /api/workouts/{id}  | yes  | Update workout                   |
-| DELETE | /api/workouts/{id}  | yes  | Delete workout                   |
-| POST   | /api/sets           | yes  | Create set                       |
-| PUT    | /api/sets/{id}      | yes  | Update set                       |
-| DELETE | /api/sets/{id}      | yes  | Delete set                       |
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| GET | `/api/health` | no | Liveness probe |
+| POST | `/api/auth/register` | no | Create account |
+| POST | `/api/auth/login` | no | Returns JWT |
+| GET | `/api/auth/me` | yes | Current user |
+| GET | `/api/exercises` | yes | List visible exercises |
+| POST | `/api/exercises` | yes | Create a personal exercise |
+| POST | `/api/exercises/resolve` | yes | Resolve an exercise name |
+| GET | `/api/workouts` | yes | List the user's sessions |
+| GET | `/api/workouts/active` | yes | List active sessions |
+| POST | `/api/workouts` | yes | Create a session |
+| GET | `/api/workouts/{workout_id}` | yes | Get a session |
+| PUT | `/api/workouts/{workout_id}` | yes | Update a session with nested exercises and sets |
+| PATCH | `/api/workouts/{workout_id}` | yes | Update session metadata |
+| DELETE | `/api/workouts/{workout_id}` | yes | Delete a session |
+| POST | `/api/workouts/{workout_id}/complete` | yes | Complete a session |
+| POST | `/api/workouts/{workout_id}/exercises` | yes | Add an exercise to a session |
+| POST | `/api/workout-exercises/{workout_exercise_id}/sets` | yes | Create a set for a session exercise |
+| POST | `/api/workout-exercises/{workout_exercise_id}/sets/reorder` | yes | Reorder sets for a session exercise |
+| PATCH | `/api/sets/{set_id}` | yes | Partially update a set |
+| DELETE | `/api/sets/{set_id}` | yes | Delete a set |
+| GET | `/api/templates` | yes | List visible templates |
+| POST | `/api/templates/resolve` | yes | Resolve a template name |
+| POST | `/api/templates/{template_id}/start` | yes | Start a session from a template |
+| POST | `/api/workouts/{workout_id}/save-as-template` | yes | Save a session as a personal template |
+| POST | `/api/assistant/interpret` | yes | Interpret text and preview commands |
+| POST | `/api/assistant/execute` | yes | Run validated commands |
 
 Authentication: `Authorization: Bearer <jwt>`.
 
@@ -235,7 +251,10 @@ Per [agents.md](agents.md):
 
 ---
 
-## 7. Roadmap
+## 7. Feature status
 
-See `docs/AI_HANDOFF.md` §8. Templates are implemented. Next is Phase 8 — AI
-Readiness, then Phase 9 — Voice. Do not start those here.
+- **Workout tracking** supports sessions, granular exercise and set editing, and reusable templates.
+- **Phase 8 — AI Readiness** adds exercise and template name resolution, active session lookup, and validated commands for workout logging.
+- **Phase 9 — Voice Assistant** accepts speech in supported browsers or typed text from Home and the session editor. The assistant previews commands before the user confirms execution. Interpretation uses OpenAI and requires `OPENAI_API_KEY` in the backend environment.
+
+See [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) §§2.16–2.17 for implementation details and §8 for the roadmap.
