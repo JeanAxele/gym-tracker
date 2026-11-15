@@ -16,8 +16,9 @@ const axiosClient = axios.create({
 
 // Request interceptor: attach JWT bearer if present.
 axiosClient.interceptors.request.use((config) => {
-  const token = getToken();
-  config.gymAccount = getLocalProfile()?.id;
+  const token = config.gymToken ?? getToken();
+  const profile = token === getToken() ? getLocalProfile() : null;
+  config.gymAccount = profile?.id;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -40,7 +41,7 @@ axiosClient.interceptors.response.use(
   },
   async (error) => {
     const status = error.response?.status;
-    if ((!status || status >= 500 || status === 401) && error.config) {
+    if ((!status || status >= 500 || status === 401) && error.config && !error.config.gymNetworkOnly) {
       const cached = await readSnapshot(error.config).catch(() => undefined);
       if (cached !== undefined) return cached;
     }

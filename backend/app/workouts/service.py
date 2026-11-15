@@ -362,7 +362,7 @@ def _legacy_we_fallback_ok(
 
 
 def _match_workout_exercises(
-    items: list[WorkoutExerciseIn], existing: list[WorkoutExercise]
+    items: list[WorkoutExerciseIn], existing: list[WorkoutExercise], *, strict_ids=False
 ) -> list[Optional[WorkoutExercise]]:
     """Resolve each incoming WE to an existing row or None (insert).
 
@@ -374,7 +374,7 @@ def _match_workout_exercises(
     """
     existing_by_id = {row.id: row for row in existing}
     supplied = [ex.id is not None for ex in items]
-    if any(supplied) and not all(supplied):
+    if strict_ids or (any(supplied) and not all(supplied)):
         # Mixed: omitted ids are new rows; supplied ids must belong here.
         matches: list[Optional[WorkoutExercise]] = []
         used: set[int] = set()
@@ -416,11 +416,11 @@ def _match_workout_exercises(
 
 
 def _match_sets(
-    incoming: list[SetIn], existing: list[Set]
+    incoming: list[SetIn], existing: list[Set], *, strict_ids=False
 ) -> list[Optional[Set]]:
     existing_by_id = {row.id: row for row in existing}
     supplied = [s.id is not None for s in incoming]
-    if any(supplied) and not all(supplied):
+    if strict_ids or (any(supplied) and not all(supplied)):
         matches: list[Optional[Set]] = []
         used: set[int] = set()
         for s_in in incoming:
@@ -469,9 +469,9 @@ def _new_attach_exercise_ids(
 
 
 def _reconcile_sets(
-    db: Session, we: WorkoutExercise, incoming: list[SetIn]
+    db: Session, we: WorkoutExercise, incoming: list[SetIn], *, strict_ids=False
 ) -> None:
-    matches = _match_sets(incoming, list(we.sets))
+    matches = _match_sets(incoming, list(we.sets), strict_ids=strict_ids)
     result: list[Set] = []
     for index, (s_in, matched) in enumerate(zip(incoming, matches)):
         if matched is not None:
@@ -505,9 +505,9 @@ def _reconcile_sets(
 
 
 def _reconcile_exercises(
-    db: Session, workout: Workout, items: list[WorkoutExerciseIn]
+    db: Session, workout: Workout, items: list[WorkoutExerciseIn], *, strict_ids=False
 ) -> list[WorkoutExercise]:
-    matches = _match_workout_exercises(items, list(workout.exercises))
+    matches = _match_workout_exercises(items, list(workout.exercises), strict_ids=strict_ids)
     result: list[WorkoutExercise] = []
     for index, (ex_in, matched) in enumerate(zip(items, matches)):
         if matched is not None:
@@ -517,7 +517,7 @@ def _reconcile_exercises(
             if ex_in.planned_explicitly_set():
                 for key, value in _planned_from_input(ex_in).items():
                     setattr(matched, key, value)
-            _reconcile_sets(db, matched, ex_in.sets)
+            _reconcile_sets(db, matched, ex_in.sets, strict_ids=strict_ids)
             result.append(matched)
         else:
             planned = (
@@ -549,7 +549,9 @@ def _reconcile_exercises(
 
 # ---- Write --------------------------------------------------------------
 
-def create_workout(db: Session, user_id: int, payload: WorkoutCreate) -> Workout:
+def create_workout(
+    db: Session, user_id: int, payload: WorkoutCreate, *, commit=True
+) -> Workout:
     """Create a workout with optional nested exercises and sets.
 
     Nested Sets are treated as a retrospective log: clocks use the
@@ -580,7 +582,10 @@ def create_workout(db: Session, user_id: int, payload: WorkoutCreate) -> Workout
     workout.exercises = _build_exercise_tree(payload.exercises)
 
     db.add(workout)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return get_workout(db, user_id, workout.id)
 
 
@@ -589,6 +594,7 @@ def update_workout(
     user_id: int,
     workout_id: int,
     payload: WorkoutUpdate,
+    *, commit=True, strict_ids=False,
 ) -> Workout:
     """Reconcile scalars and the nested tree without recreating matched children.
 
@@ -598,7 +604,7 @@ def update_workout(
     rewritten.
     """
     workout = get_workout(db, user_id, workout_id)
-    matches = _match_workout_exercises(payload.exercises, list(workout.exercises))
+    matches = _match_workout_exercises(payload.exercises, list(workout.exercises), strict_ids=strict_ids)
     new_ids = _new_attach_exercise_ids(payload.exercises, matches)
     _validate_exercise_ids(db, user_id, new_ids)
 
@@ -606,9 +612,12 @@ def update_workout(
     if payload.date is not None:
         workout.date = payload.date
 
-    workout.exercises = _reconcile_exercises(db, workout, payload.exercises)
+    workout.exercises = _reconcile_exercises(db, workout, payload.exercises, strict_ids=strict_ids)
 
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return get_workout(db, user_id, workout_id)
 
 

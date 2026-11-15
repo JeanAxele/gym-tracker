@@ -9,8 +9,9 @@ import pytest
 from sqlalchemy import create_engine, text
 
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
-HEAD = "0153e917bf85"
+HEAD = "49c73a76d1a4"
 EXPECTED_TABLES = {
+    "workout_sync_receipts",
     "alembic_version",
     "users",
     "exercises",

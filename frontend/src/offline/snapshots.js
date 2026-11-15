@@ -26,12 +26,22 @@ export function setLocalProfile(profile) {
   }
 }
 
-function openDatabase() {
+export function openDatabase() {
   if (!database) {
     database = new Promise((resolve, reject) => {
-      const request = indexedDB.open('gym-tracker', 1);
-      request.onupgradeneeded = () => request.result.createObjectStore('snapshots');
-      request.onsuccess = () => resolve(request.result);
+      const request = indexedDB.open('gym-tracker', 2);
+      request.onupgradeneeded = (event) => {
+        if (event.oldVersion < 1) request.result.createObjectStore('snapshots');
+        request.result.createObjectStore('workoutAccounts');
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onversionchange = () => {
+          db.close();
+          database = undefined;
+        };
+        resolve(db);
+      };
       request.onerror = () => reject(request.error);
     }).catch((error) => {
       database = undefined;

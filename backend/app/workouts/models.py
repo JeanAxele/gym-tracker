@@ -23,6 +23,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     Numeric,
     String,
 )
@@ -233,3 +234,14 @@ class Set(Base):
             f"reps={self.reps} weight_kg={self.weight_kg} "
             f"set_type={self.set_type!r}>"
         )
+
+
+class WorkoutSyncReceipt(Base):
+    """Durable response for a mutation, committed with the workout change."""
+
+    __tablename__ = "workout_sync_receipts"
+
+    user_id = Column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    operation_id = Column(String(36), primary_key=True)
+    fingerprint = Column(String(64), nullable=False)
+    result = Column(JSON, nullable=True)

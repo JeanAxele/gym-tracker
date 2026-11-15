@@ -14,6 +14,6 @@ export async function getLastWeights(exerciseIds, excludeWorkoutId) {
   const ids = (exerciseIds || []).filter((id) => Number(id) > 0);
   if (ids.length === 0) return [];
   const params = { ids: ids.join(',') };
-  if (excludeWorkoutId) params.exclude_workout_id = excludeWorkoutId;
+  if (Number(excludeWorkoutId) > 0) params.exclude_workout_id = excludeWorkoutId;
   return client.get('/exercises/last-weights', { params });
 }
