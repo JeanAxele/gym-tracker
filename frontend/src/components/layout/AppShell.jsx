@@ -4,6 +4,7 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import Header from './Header.jsx';
 import BottomNav from './BottomNav.jsx';
+import SyncStatus from './SyncStatus.jsx';
 import { cn } from '@/lib/utils.js';
 
 // The workout editor (/workouts/new, /workouts/:id/edit) frees up vertical
@@ -24,6 +25,7 @@ export default function AppShell() {
   return (
     <div className="flex min-h-dvh flex-col bg-background">
       <Header />
+      <SyncStatus />
 
       <main className={cn('flex-1 animate-fade-in pt-4', floatingNav ? 'pb-24' : 'pb-8')}>
         <Outlet />

@@ -1,22 +1,28 @@
-// Granular Set APIs (Phase 5 surface).
-// POST /sets and PUT /sets/{id} do not exist — do not reintroduce them.
+import { editLocalWorkout } from '../offline/workouts.js';
 
-import client from './axiosClient.js';
-
-export async function createSet(workoutExerciseId, payload) {
-  return client.post(`/workout-exercises/${workoutExerciseId}/sets`, payload);
+function editExercise(workoutId, exerciseId, edit) {
+  return editLocalWorkout(workoutId, (_, workout) => {
+    const exercise = workout.exercises.find((row) => row.id === exerciseId);
+    if (!exercise) throw new Error('Exercise no longer exists.');
+    return edit(exercise);
+  });
 }
 
-export async function patchSet(setId, payload) {
-  return client.patch(`/sets/${setId}`, payload);
+export function saveSet(workoutId, exerciseId, setId, payload) {
+  return editExercise(workoutId, exerciseId, (exercise) => {
+    const existing = exercise.sets.find((row) => row.id === setId);
+    if (existing) return Object.assign(existing, payload);
+    if (setId > 0) throw new Error('Set no longer exists.');
+    const set = { id: setId, set_type: 'working', ...payload, order_index: exercise.sets.length };
+    exercise.sets.push(set);
+    return set;
+  });
 }
 
-export async function deleteSet(setId) {
-  return client.delete(`/sets/${setId}`);
-}
-
-export async function reorderSets(workoutExerciseId, ids) {
-  return client.post(`/workout-exercises/${workoutExerciseId}/sets/reorder`, {
-    ids,
+export function deleteSet(workoutId, exerciseId, setId) {
+  return editExercise(workoutId, exerciseId, (exercise) => {
+    exercise.sets = exercise.sets
+      .filter((set) => set.id !== setId)
+      .map((set, index) => ({ ...set, order_index: index }));
   });
 }

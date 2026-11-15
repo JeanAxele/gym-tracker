@@ -31,6 +31,7 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.response import ok
 from app.workouts import service
+from app.workouts.sync import WorkoutMutation, apply_mutation, detail_with_revision
 from app.templates import service as templates_service
 from app.templates.schemas import TemplateDetail, TemplateNameIn
 from app.workouts.schemas import (
@@ -85,6 +86,15 @@ def create_workout(
     return ok(WorkoutDetail.model_validate(workout))
 
 
+@router.post("/workouts/sync")
+def sync_workout(
+    payload: WorkoutMutation,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    return ok(apply_mutation(db, current_user.id, payload))
+
+
 @router.get("/workouts/{workout_id}")
 def get_workout(
     workout_id: int,
@@ -93,7 +103,7 @@ def get_workout(
 ) -> dict:
     """Fetch a single workout owned by the current user, with full nested data."""
     workout = service.get_workout(db, current_user.id, workout_id)
-    return ok(WorkoutDetail.model_validate(workout))
+    return ok(detail_with_revision(workout))
 
 
 @router.put("/workouts/{workout_id}")

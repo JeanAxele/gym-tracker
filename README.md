@@ -3,6 +3,7 @@
 A simple, mobile-first workout tracking web app for personal use. Full-stack scaffold:
 a FastAPI modular monolith backend and a Vite + React JavaScript frontend.
 
+> [Offline setup and verification](docs/OFFLINE.md).
 > Canonical project state: [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md).
 > Current status: **Phase 8 (AI Readiness) and Phase 9 (Voice Assistant) are implemented.**
 

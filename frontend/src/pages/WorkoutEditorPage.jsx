@@ -9,15 +9,16 @@ import {
   getWorkout,
   patchWorkout,
 } from '@/api/workouts.js';
+import { remoteWorkoutContext } from '@/offline/workouts.js';
+import { localId } from '@/offline/workoutStore.js';
 import { getLastWeights } from '@/api/exercises.js';
-import { createSet, deleteSet, patchSet } from '@/api/sets.js';
+import { saveSet, deleteSet } from '@/api/sets.js';
 import useAsync from '@/hooks/useAsync.js';
 import { toDateInputValue } from '@/utils/format.js';
 import {
   emptyDraftRow,
   hasPrimaryValue,
   lastWeightMap,
-  shouldDeleteSetViaApi,
   shouldPersistSet,
   rowsForWorkoutExercise,
   setWritePayload,
@@ -69,31 +70,39 @@ export default function WorkoutEditorPage() {
   const [busy, setBusy] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const [focusWeId, setFocusWeId] = useState(null);
+  const [assistantContext, setAssistantContext] = useState(null);
   const blocksRef = useRef([]);
+  const draftIds = useRef(new Map());
+  const pendingWrites = useRef(new Map());
+  const lastWrites = useRef(new Map());
+  const touchedRows = useRef(new Set());
 
   useEffect(() => {
     if (!workout) return undefined;
     setName(workout.name);
     setDate(toDateInputValue(workout.date));
     let cancelled = false;
+    if (pendingWrites.current.size === 0) {
+      const next = buildBlocks(workout, {});
+      blocksRef.current = next;
+      setBlocks(next);
+    }
     const ids = (workout.exercises || []).map((we) => we.exercise.id);
-    getLastWeights(ids, workout.id)
-      .then((rows) => {
-        if (cancelled) return;
-        const map = lastWeightMap(rows);
-        setWeights(map);
-        const next = buildBlocks(workout, map);
-        blocksRef.current = next;
-        setBlocks(next);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setWeights({});
-        const next = buildBlocks(workout, {});
-        blocksRef.current = next;
-        setBlocks(next);
-      });
+    getLastWeights(ids, workout.id).then((rows) => {
+      if (cancelled) return;
+      const map = lastWeightMap(rows);
+      setWeights(map);
+      const next = blocksRef.current.map((block) => ({
+        ...block,
+        rows: block.rows.map((row) => {
+          const suggested = map[block.exercise.id];
+          if (row.set_id || touchedRows.current.has(row.clientKey) || suggested == null) return row;
+          return { ...row, weight_kg: suggested };
+        }),
+      }));
+      blocksRef.current = next;
+      setBlocks(next);
+    }).catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -102,13 +111,11 @@ export default function WorkoutEditorPage() {
   const isActive = workout?.ended_at == null;
 
   const replaceBlock = (workoutExerciseId, updater) => {
-    setBlocks((current) => {
-      const next = current.map((block) =>
-        block.workout_exercise_id === workoutExerciseId ? updater(block) : block
-      );
-      blocksRef.current = next;
-      return next;
-    });
+    const next = blocksRef.current.map((block) =>
+      block.workout_exercise_id === workoutExerciseId ? updater(block) : block
+    );
+    blocksRef.current = next;
+    setBlocks(next);
   };
 
   const handleMetaBlur = async () => {
@@ -133,29 +140,13 @@ export default function WorkoutEditorPage() {
     setBusy(true);
     setServerError(null);
     try {
-      const extra = await getLastWeights([exercise.id], id).catch(() => []);
-      const nextWeights = { ...weights, ...lastWeightMap(extra) };
-      setWeights(nextWeights);
-      const created = await addWorkoutExercise(id, { exercise_id: exercise.id });
-      setBlocks((current) => {
-        const next = [
-        ...current,
-        {
-          workout_exercise_id: created.id,
-          exercise: created.exercise,
-          planned_sets: created.planned_sets,
-          planned_reps_min: created.planned_reps_min,
-          planned_reps_max: created.planned_reps_max,
-          planned_duration_seconds_min: created.planned_duration_seconds_min,
-          planned_duration_seconds_max: created.planned_duration_seconds_max,
-          planned_distance_meters_min: created.planned_distance_meters_min,
-          planned_distance_meters_max: created.planned_distance_meters_max,
-          rows: rowsForWorkoutExercise(created, nextWeights[exercise.id]),
-        },
-      ];
-        blocksRef.current = next;
-        return next;
-      });
+      const created = await addWorkoutExercise(id, exercise);
+      const next = [...blocksRef.current, ...buildBlocks({ exercises: [created] }, weights)];
+      blocksRef.current = next;
+      setBlocks(next);
+      void getLastWeights([exercise.id], id)
+        .then((rows) => setWeights((current) => ({ ...current, ...lastWeightMap(rows) })))
+        .catch(() => {});
     } catch (err) {
       setServerError(err?.message || 'Could not add the exercise.');
     } finally {
@@ -167,14 +158,10 @@ export default function WorkoutEditorPage() {
     setBusy(true);
     setServerError(null);
     try {
-      await deleteWorkoutExercise(workoutExerciseId);
-      setBlocks((current) => {
-        const next = current.filter(
-          (block) => block.workout_exercise_id !== workoutExerciseId
-        );
-        blocksRef.current = next;
-        return next;
-      });
+      await deleteWorkoutExercise(id, workoutExerciseId);
+      const next = blocksRef.current.filter((block) => block.workout_exercise_id !== workoutExerciseId);
+      blocksRef.current = next;
+      setBlocks(next);
     } catch (err) {
       setServerError(err?.message || 'Could not remove the exercise.');
     } finally {
@@ -185,64 +172,51 @@ export default function WorkoutEditorPage() {
   const handleRowChange = (workoutExerciseId, setIndex, patch) => {
     replaceBlock(workoutExerciseId, (block) => ({
       ...block,
-      rows: block.rows.map((row, index) =>
-        index === setIndex ? { ...row, ...patch } : row
-      ),
+      rows: block.rows.map((row, index) => {
+        if (index !== setIndex) return row;
+        touchedRows.current.add(row.clientKey);
+        return { ...row, ...patch };
+      }),
     }));
+    void handleRowCommit(workoutExerciseId, setIndex);
   };
-  // replaceBlock already writes blocksRef before persist/commit reads it.
 
-  const handleRowCommit = async (workoutExerciseId, setIndex) => {
-    const block = blocksRef.current.find(
-      (item) => item.workout_exercise_id === workoutExerciseId
-    );
-    if (!block) return;
-    const row = block.rows[setIndex];
-    if (!row) return;
+  const handleRowCommit = (workoutExerciseId, setIndex) => {
+    const block = blocksRef.current.find((item) => item.workout_exercise_id === workoutExerciseId);
+    const row = block?.rows[setIndex];
+    if (!row) return Promise.resolve(true);
     const tracking = trackingOf(block.exercise);
-    if (!shouldPersistSet(row, tracking)) return;
-    const primaryOk = hasPrimaryValue(row, tracking.primary);
+    if (!shouldPersistSet(row, tracking)) return Promise.resolve(true);
 
-    const payload = primaryOk
-      ? setWritePayload(row, tracking)
-      : row.weight_kg !== '' && row.weight_kg != null
-        ? { weight_kg: Number(row.weight_kg) }
-        : null;
-    if (!payload) return;
-    setBusy(true);
-    setServerError(null);
-    try {
-      if (row.set_id) {
-        const updated = await patchSet(row.set_id, payload);
+    const primaryOk = hasPrimaryValue(row, tracking.primary);
+    const payload = primaryOk ? setWritePayload(row, tracking) : { weight_kg: Number(row.weight_kg) };
+    const key = row.clientKey;
+    const signature = JSON.stringify(payload);
+    if (lastWrites.current.get(key) === signature) return pendingWrites.current.get(key) ?? Promise.resolve(true);
+    lastWrites.current.set(key, signature);
+    const setId = row.set_id ?? draftIds.current.get(key) ?? localId();
+    draftIds.current.set(key, setId);
+    const previous = pendingWrites.current.get(key) ?? Promise.resolve();
+    const write = previous.then(async () => {
+      try {
+        await saveSet(id, workoutExerciseId, setId, payload);
         replaceBlock(workoutExerciseId, (current) => ({
           ...current,
-          rows: current.rows.map((item, index) =>
-            index === setIndex
-              ? { ...item, set_id: updated.id, ...recordedPatch(updated) }
-              : item
-          ),
+          rows: current.rows.map((item) => item.clientKey === key ? { ...item, set_id: setId } : item),
         }));
-      } else {
-        const created = await createSet(workoutExerciseId, payload);
-        replaceBlock(workoutExerciseId, (current) => ({
-          ...current,
-          rows: current.rows.map((item, index) =>
-            index === setIndex
-              ? {
-                  ...item,
-                  clientKey: `set-${created.id}`,
-                  set_id: created.id,
-                  ...recordedPatch(created),
-                }
-              : item
-          ),
-        }));
+        setServerError(null);
+        return true;
+      } catch (error) {
+        if (lastWrites.current.get(key) === signature) lastWrites.current.delete(key);
+        setServerError(error.message || 'Could not save the set.');
+        return false;
       }
-    } catch (err) {
-      setServerError(err?.message || 'Could not save the set.');
-    } finally {
-      setBusy(false);
-    }
+    });
+    pendingWrites.current.set(key, write);
+    void write.then((success) => {
+      if (success && pendingWrites.current.get(key) === write) pendingWrites.current.delete(key);
+    });
+    return write;
   };
 
   const handleRowRemove = async (workoutExerciseId, setIndex) => {
@@ -252,8 +226,16 @@ export default function WorkoutEditorPage() {
     if (!block) return;
     const row = block.rows[setIndex];
     if (!row) return;
+    await pendingWrites.current.get(row.clientKey);
+    const setId = row.set_id ?? draftIds.current.get(row.clientKey);
+    const stored = blocksRef.current.find((item) => item.workout_exercise_id === workoutExerciseId)
+      ?.rows.find((item) => item.clientKey === row.clientKey)?.set_id;
+    pendingWrites.current.delete(row.clientKey);
+    draftIds.current.delete(row.clientKey);
+    lastWrites.current.delete(row.clientKey);
+    touchedRows.current.delete(row.clientKey);
 
-    if (!shouldDeleteSetViaApi(row)) {
+    if (!stored) {
       replaceBlock(workoutExerciseId, (current) => ({
         ...current,
         rows:
@@ -267,7 +249,7 @@ export default function WorkoutEditorPage() {
     setBusy(true);
     setServerError(null);
     try {
-      await deleteSet(row.set_id);
+      await deleteSet(id, workoutExerciseId, setId);
       replaceBlock(workoutExerciseId, (current) => {
         const next = current.rows.filter((_, index) => index !== setIndex);
         return {
@@ -296,6 +278,7 @@ export default function WorkoutEditorPage() {
   };
 
   const handleFinish = async () => {
+    if (!(await Promise.all(pendingWrites.current.values())).every(Boolean)) return;
     const metaOk = await handleMetaBlur();
     if (!metaOk) return;
     setBusy(true);
@@ -310,14 +293,20 @@ export default function WorkoutEditorPage() {
     }
   };
 
-  const openAssistant = (workoutExerciseId = null) => {
-    setFocusWeId(workoutExerciseId);
-    setAssistantOpen(true);
+  const openAssistant = async (workoutExerciseId = null) => {
+    try {
+      if (!navigator.onLine) throw new Error('The voice assistant requires a connection.');
+      const context = await remoteWorkoutContext(id, workoutExerciseId);
+      setAssistantContext(context);
+      setAssistantOpen(true);
+    } catch (error) {
+      setServerError(error.message);
+    }
   };
 
   const handleAssistantExecuted = async (executeResult) => {
     const created = createdWorkoutId(executeResult);
-    if (created && String(created) !== String(id)) {
+    if (created && String(created) !== String(assistantContext?.workoutId)) {
       navigate(`/workouts/${created}/edit`, { replace: true });
       return;
     }
@@ -336,6 +325,9 @@ export default function WorkoutEditorPage() {
     if (shouldReloadSession(executeResult)) {
       try {
         const updated = await getWorkout(id);
+        const next = buildBlocks(updated, weights);
+        blocksRef.current = next;
+        setBlocks(next);
         setData(updated);
       } catch {
         reload();
@@ -424,21 +416,12 @@ export default function WorkoutEditorPage() {
           <VoiceAssistantSheet
             open={assistantOpen}
             onClose={() => setAssistantOpen(false)}
-            workoutId={id}
-            focusWorkoutExerciseId={focusWeId}
+            workoutId={assistantContext?.workoutId}
+            focusWorkoutExerciseId={assistantContext?.exerciseId}
             onExecuted={handleAssistantExecuted}
           />
         </>
       )}
     </PageContainer>
   );
-}
-
-function recordedPatch(set) {
-  return {
-    reps: set.reps ?? '',
-    weight_kg: set.weight_kg ?? '',
-    duration_seconds: set.duration_seconds ?? '',
-    distance_meters: set.distance_meters ?? '',
-  };
 }
